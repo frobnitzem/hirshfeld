@@ -7,7 +7,7 @@ import numpy as np
 from pyscf import gto, dft, symm
 from pyscf.data import elements
 
-from .hirshfeld import occ_pattern, make_symmetric
+from pyscf.hirshfeld.hirshfeld import occ_pattern, make_symmetric
 
 irrep_nelec = {
         'H': [ {} ],
@@ -109,7 +109,7 @@ def avg_irreps(elem):
         mf.irrep_nelec = ir
         en = mf.kernel()
         # mf.mo_energy, mf.mo_occ
-        w = np.where(mf.mo_occ < 0.5)[0][0]+1
+        w = np.where(mf.mo_occ < 0.001)[0][0]+1
         print(elem, en, str(mf.mo_energy[:w]) + '\n' + str(mf.mo_occ[:w]))
         dm = mf.make_rdm1() + dm
         print(mf.mo_occ[:w])
@@ -137,26 +137,22 @@ def avg_irreps(elem):
 def run_single(elem, s : int, xc='pbe'):
     mol = gto.M(atom=[(elem,0,0,0)], spin=s, basis='cc-pvqz', symmetry='SO3')
 
-    mf = dft.RKS(mol, xc=xc)
+    mf = dft.UKS(mol, xc=xc)
     en = mf.kernel()
 
     return s, en, mf
 
 def myocc(mf):
-    w = np.where(mf.mo_occ < 0.5)[0][0]+2
+    mo_occ = mf.mo_occ[0]+mf.mo_occ[1]
+    w = np.where(mo_occ < 0.001)[0][0]+2
 
     mol = mf.mol
-    try:
-        orbsym = symm.label_orb_symm(mol, mol.irrep_id, mol.symm_orb, mf.mo_coeff)
-        irrep_name = dict(zip(mol.irrep_id, mol.irrep_name))
-    except ValueError:
-        orbsym = [0]*len(mf.mo_energy)
-        irrep_name = { 0: 'unk' }
+    orbsym = symm.label_orb_symm(mol, mol.irrep_id, mol.symm_orb, mf.mo_coeff[0])
+    irrep_name = dict(zip(mol.irrep_id, mol.irrep_name))
 
-    print(mf.mo_occ.shape)
     print("symmetry occupancy energy")
     for i in range(w):
-        print(f"{irrep_name[orbsym[i]]} {mf.mo_occ[i]} {mf.mo_energy[i]}")
+        print(f"{irrep_name[orbsym[i]]} {mf.mo_occ[0][i]},{mf.mo_occ[1][i]} {mf.mo_energy[0][i]},{mf.mo_energy[1][i]}")
 
 def determine_spin_state(elem):
     Z = elements.NUC[elem]

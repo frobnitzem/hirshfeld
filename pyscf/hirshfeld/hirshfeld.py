@@ -65,7 +65,10 @@ def _calc(mol : gto.Mole, functional : str):
         rotations.  I don't know how to do that in general.
     """
     Z = mol.atom_charges()
-    mf = dft.UKS(mol, xc=functional)
+    if mol.spin == 0:
+        mf = dft.RKS(mol, xc=functional)
+    else:
+        mf = dft.UKS(mol, xc=functional)
     energy = mf.kernel()
     return mf
 
@@ -78,7 +81,7 @@ def _dm_of(ks, mo_occ):
         return _construct(mo_occ[0], ks.mo_coeff[0]) \
              + _construct(mo_occ[1], ks.mo_coeff[1])
 
-    return _construct(mk_occ, ks.mo_coeff)
+    return _construct(mo_occ, ks.mo_coeff)
 
 def calc_rho(crds, mol, dm):
     """ Return the electron density at the set of points, `crds`
@@ -288,12 +291,16 @@ def make_symmetric(mf, occ):
         raise ValueError("Unexpected occupancies for frontier orbitals: p-1,p+0,p+1 ~ {ps}")
 
     rng = slice(p_start, p_start+norb)
-    avg = mo_occ[rng].sum() / norb
+    if not twospin:
+        mo_occ[rng] = mo_occ[rng].sum() / norb
+        return mo_occ
 
-    mo_occ[rng] = avg
-    if twospin:
-        return (mo_occ*0.5, mo_occ*0.5)
-    return mo_occ
+    # average spins separately
+    occ1 = mf.mo_occ[0].copy()
+    occ1[rng] = occ1[rng].sum() / norb
+    occ2 = mf.mo_occ[1].copy()
+    occ2[rng] = occ2[rng].sum() / norb
+    return (occ1, occ2)
     ##return mf.mo_coeff[:,rng]
 
 def test_hirshfeld():
