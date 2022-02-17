@@ -3,7 +3,7 @@ Hirshfeld Analysis module for PySCF
 
 2022-02-16
 
-* Version 0.1
+* Version 0.2
 
 Install
 -------

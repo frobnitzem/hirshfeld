@@ -54,7 +54,7 @@ def _calc(mol : gto.Mole, functional : str):
 
     Kwargs:
         functional : str
-            Density functional for use with dft.ROKS.
+            Density functional for use with dft.UKS.
 
     Note:
         This routine enforces a spherically symmetric solution for
@@ -65,18 +65,20 @@ def _calc(mol : gto.Mole, functional : str):
         rotations.  I don't know how to do that in general.
     """
     Z = mol.atom_charges()
-    if len(Z) == 1:
-        mol.symmetry = 'SO3' # should be K...
-        mol.build()
-    mf = dft.ROKS(mol, xc=functional)
+    mf = dft.UKS(mol, xc=functional)
     energy = mf.kernel()
     return mf
 
-def _dm_of(ks):
-    dm = ks.make_rdm1()
-    if len(dm.shape) == 3:
-        return dm.sum(0)
-    return dm
+def _construct(lm, V): # reconstruct a matrix from eigenvectors
+    V1 = V[:,lm>0]
+    return np.dot(V1*lm[lm>0], V1.conj().T)
+
+def _dm_of(ks, mo_occ):
+    if isinstance(mo_occ, tuple) or len(mo_occ.shape) == 2:
+        return _construct(mo_occ[0], ks.mo_coeff[0]) \
+             + _construct(mo_occ[1], ks.mo_coeff[1])
+
+    return _construct(mk_occ, ks.mo_coeff)
 
 def calc_rho(crds, mol, dm):
     """ Return the electron density at the set of points, `crds`
@@ -99,11 +101,12 @@ class Hirshfeld:
     # Cached results of single-atom relative volume (integral rho*r^3)
     vol_cache = {}
 
-    def __init__(self, mol : gto.M, functional : str):
+    def __init__(self, mol : gto.M, functional : str, ks = None):
         self.mol = mol
         self.functional = functional
-        ks = _calc(self.mol, self.functional)
-        dm = _dm_of(ks)
+        if ks is None:
+            ks = _calc(self.mol, self.functional)
+        dm = _dm_of(ks, ks.mo_occ)
         self.dm = dm
 
         #crd, wt = dft.grids.get_partition(mol)
@@ -125,23 +128,25 @@ class Hirshfeld:
             # Scale integral to equal mol.atom_charge(i).
             ichg = np.vdot(wt, self.wref[i])
             zi = self.mol.atom_charge(i)
-            if abs(ichg - zi) > 1e-5:
+            if abs(ichg - zi) > 1e-4:
                 print(f"Atom {i} {elem} charge = {zi} integrates to {ichg}!")
             self.wref[i] *= zi / ichg
             zsum += elements.NUC[elem]
         self.rho_ref = self.wref.sum(0)     # density units
-        self.wref *= self.wt / self.rho_ref # convert to weights
+        mzero = self.rho_ref == 0.0
+        self.wref *= (1-mzero) * self.wt / (mzero + self.rho_ref) # convert to weights
 
         # Scale integral to equal zsum
         self.rho = calc_rho(crd, self.mol, dm)
         ichg = np.vdot(wt, self.rho)
-        if abs(ichg - zsum) > 1e-5:
+        if abs(ichg - zsum) > 1e-4:
             print(f"Sum of atomic charges = {ichg}, differs significantly from expected = {zsum}")
         self.rho *= zsum / ichg
-        self.drho = self.rho - self.rho_ref # difference density for rho
+        self.chg = self.rho_ref - self.rho # difference charge density
 
-    def charges(self):
-        return np.dot(self.wref, self.rho) # Hirshfeld charge partion
+    def charges(self): # Hirshfeld charge partion
+        return self.mol.atom_charges() \
+                - np.dot(self.wref, self.rho)
 
     def ratios(self):
         """
@@ -149,7 +154,7 @@ class Hirshfeld:
         [10.1103/PhysRevLett.102.073005]
         """
         elem_vols = {}
-        rats = np.zeros(len(self.wref))
+        rats = np.zeros(self.mol.natm)
         for i,elem in enumerate(self.mol.elements):
             rvol = self.single_vol(elem)
             ri = self.mol.atom_coord(i)
@@ -171,24 +176,24 @@ class Hirshfeld:
 
             The integral done for every atom, a (at r_a), is,
 
-               int fn(r - r_a) drho_a dr^3
+               int fn(r - r_a) chg_a dr^3
 
-            where drho_a = [rho - rho_ref]*(weight function for atom a)
-
+            where chg_a = -1*[rho - rho_ref]*(weight function for atom a)
         """
 
+        natm = self.mol.natm
         ans0 = fn(self.crd - self.mol.atom_coord(0))
         assert len(ans0) == len(self.crd), "Invalid return shape from fn."
-        ans = np.zeros( (len(self.wref),) + ans0.shape[1:] )
-        ans[0] = np.tensordot(self.drho*self.wref[0], ans0, axes=[0,0])
-        for i in range(1, len(self.wref)):
+        ans = np.zeros( (natm,) + ans0.shape[1:] )
+        ans[0] = np.tensordot(self.chg*self.wref[0], ans0, axes=[0,0])
+        for i in range(1, natm):
             ri = self.mol.atom_coord(i)
-            ans[i] = np.tensordot(self.drho*self.wref[i],
+            ans[i] = np.tensordot(self.chg*self.wref[i],
                                   fn(self.crd - ri), axes=[0,0])
         return ans
     
     def single_atom(self, elem : str):
-        """ Return a (gto.Mole, ROKS, density_matrix) tuple for the given
+        """ Return a (gto.Mole, UKS, density_matrix) tuple for the given
             element - using a basis and functional consistent with
             self.mol
         """
@@ -203,10 +208,11 @@ class Hirshfeld:
             raise KeyError(f"Hirshfeld needs a definition for frontier orbital occupancy of '{elem}'.")
         spin = int( ( np.array(occ)==1 ).sum() )
 
-        mol = gto.M( atom=[(elem,0,0,0)], basis=self.mol.basis, spin=spin, charge=0 )
+        mol = gto.M( atom=[(elem,0,0,0)], basis=self.mol.basis,
+                     spin=spin, charge=0, symmetry='SO3' )
         ks = _calc(mol, functional=self.functional)
-        make_symmetric(ks, occ)
-        dm = _dm_of(ks)
+        mo_occ = make_symmetric(ks, occ)
+        dm = _dm_of(ks, mo_occ)
 
         ans = mol, ks, dm
         Hirshfeld.cache[key] = ans
@@ -241,20 +247,29 @@ def get_index(a, b):
     return sb[:i].count(sep)
 
 def make_symmetric(mf, occ):
-    """ Overwrite mf.mo_occ with a spherically symmetrized orbital occupancy.
+    """ Return a version of mf.mo_occ with a spherically symmetrized
+        orbital occupancy.
         Only handles p-orbitals for now.
     """
     if len(occ) <= 1:
-        return
+        return mf.mo_occ
 
+    mo_occ = np.array( mf.mo_occ )
+    twospin = False
+    if len(mo_occ.shape) == 2:
+        twospin = True
+        mo_occ = mo_occ.sum(0)
     mol = mf.mol
     norb = len(occ) # number of orbitals to average
     try:
-        p_start = get_index(map(float, occ), mf.mo_occ)
+        p_start = get_index(map(float, occ), mo_occ)
     except ValueError:
         raise ValueError(f"Unable to find expected occupancy pattern in solution")
 
-    orbsym = symm.label_orb_symm(mol, mol.irrep_id, mol.symm_orb, mf.mo_coeff)
+    if twospin:
+        orbsym = symm.label_orb_symm(mol, mol.irrep_id, mol.symm_orb, mf.mo_coeff[0])
+    else:
+        orbsym = symm.label_orb_symm(mol, mol.irrep_id, mol.symm_orb, mf.mo_coeff)
     orbsym = np.array(orbsym)
 
     # Map orbital symmetry number to 'p-1,p+0,p+1' to double-check
@@ -264,7 +279,7 @@ def make_symmetric(mf, occ):
     ps = [0]*len(psmap)
     for i in range(p_start, p_start+norb):
         sym = numid[ orbsym[i] ] # name of orbital symmetry type
-        #print(f"{i} {sym} {mf.mo_occ[i]}")
+        #print(f"{i} {sym} {mo_occ[i]}")
         try:
             ps[psmap[sym]] += 1
         except KeyError:
@@ -273,9 +288,13 @@ def make_symmetric(mf, occ):
         raise ValueError("Unexpected occupancies for frontier orbitals: p-1,p+0,p+1 ~ {ps}")
 
     rng = slice(p_start, p_start+norb)
-    avg = mf.mo_occ[rng].sum() / norb
-    mf.mo_occ[rng] = avg
-    #return mf.mo_coeff[:,rng]
+    avg = mo_occ[rng].sum() / norb
+
+    mo_occ[rng] = avg
+    if twospin:
+        return (mo_occ*0.5, mo_occ*0.5)
+    return mo_occ
+    ##return mf.mo_coeff[:,rng]
 
 def test_hirshfeld():
     # both of the following units options work
@@ -302,8 +321,8 @@ def test_hirshfeld():
     assert abs(np.dot(H.rho, H.wref[1]) - 7) < 1e-12
 
     # Hirshfeld Dipoles
-    d1 = np.dot(H.drho*H.wref[0], H.crd-mol.atom_coord(0))
-    d2 = np.dot(H.drho*H.wref[1], H.crd-mol.atom_coord(1))
+    d1 = np.dot(H.chg*H.wref[0], H.crd-mol.atom_coord(0))
+    d2 = np.dot(H.chg*H.wref[1], H.crd-mol.atom_coord(1))
 
     print(d2)
     assert abs(d1[0]) < 1e-12
@@ -311,7 +330,7 @@ def test_hirshfeld():
     assert abs(d2[0]) < 1e-12
     assert abs(d2[1]) < 1e-12
     assert abs(d1[2]+d2[2]) < 1e-12
-    assert abs(d2[2] - 0.356765311) < 1e-5
+    assert abs(d2[2] + 0.356765311) < 1e-5
 
     dN = H.integrate(lambda r: r)
     assert np.allclose(dN[0], d1)
