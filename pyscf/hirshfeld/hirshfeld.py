@@ -221,6 +221,10 @@ class Hirshfeld:
         Hirshfeld.cache[key] = ans
         return ans
 
+    def ref_en(self):
+        return np.sum([self.single_atom(elem)[1].e_tot \
+                        for elem in self.mol.elements])
+
     def single_vol(self, elem):
         key = (elem, self.mol.basis, self.functional) # cache results
         ans = Hirshfeld.vol_cache.get(key, None)
