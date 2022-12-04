@@ -1,6 +1,17 @@
 Hirshfeld Analysis module for PySCF
 ===================================
 
+2022-12-04
+
+* Version 1.0
+   - changed Hirshfeld to HirshfeldAnalysis
+     from https://github.com/ajz34/vdw.git
+
+     - This rearranges the API from functions like charges()
+       to properties like H.result['charge_eff']
+
+   - replaced single atom calculations with nrks
+
 2022-02-17
 
 * Version 0.3

@@ -1,4 +1,4 @@
-__version__ = '0.3.0'
+__version__ = '1.0.0'
 
-from .hirshfeld import Hirshfeld, calc_rho
+from .hirshfeld import HirshfeldAnalysis
 
