@@ -75,7 +75,10 @@ class HirshfeldAnalysis:
             grids = dft.Grids(mol)
             grids.atom_grid = (77, 302)
             grids.build()
-        rho = ni.get_rho(mol, mf.make_rdm1(), grids)
+        dm = mf.make_rdm1()
+        if isinstance(dm, tuple) or len(dm.shape) == 3:
+            dm = dm[0]+dm[1]
+        rho = ni.get_rho(mol, dm, grids)
         Ntot = np.vdot(rho, grids.weights)
         #print(f"integrated electrons: {Ntot}")
         #print(f"nelectron: {mol.nelectron}")
