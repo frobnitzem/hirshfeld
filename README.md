@@ -36,12 +36,12 @@ There are two different options for installation:
 
 * Install to python site-packages folder
 ```
-pip install git+https://github.com/pyscf/hirshfeld
+pip install git+https://github.com/frobnitzem/hirshfeld
 ```
 
 * Install in a custom folder for development
 ```
-git clone https://github.com/pyscf/hirshfeld.git /home/abc/local/path
+git clone https://github.com/frobnitzem/hirshfeld.git /home/abc/local/path
 
 # Set pyscf extended module path:
 echo 'export PYSCF_EXT_PATH=/home/abc/local/path:$PYSCF_EXT_PATH' >> ~/.bashrc
